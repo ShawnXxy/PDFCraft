@@ -1,0 +1,5 @@
+PyPDF2==3.0.1
+requests==2.31.0
+markitdown==0.0.1a2
+click==8.1.7
+pathlib2==2.3.7
