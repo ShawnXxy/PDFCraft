@@ -77,9 +77,13 @@ class BookmarkAnalyzer:
             List[Dict[str, Any]]: List of parsed bookmarks
         """
         bookmarks = []
-        page_counter = 2  # Start from page 2 for test purposes
 
-        for i, item in enumerate(outline):
+        # Prevent infinite recursion
+        if level > 10:  # Maximum reasonable bookmark depth
+            self.logger.warning(f"Maximum bookmark depth reached: {level}")
+            return bookmarks
+
+        for item in outline:
             if isinstance(item, list):
                 # Nested bookmarks
                 bookmarks.extend(
@@ -87,8 +91,8 @@ class BookmarkAnalyzer:
             else:
                 # Individual bookmark
                 try:
-                    # Use sequential page numbering for our test
-                    page_num = page_counter + i
+                    # Get actual page number from bookmark
+                    page_num = self._get_page_number(item, pdf_reader)
                     bookmark = {
                         'title': str(item.title),
                         'page': page_num,
@@ -98,6 +102,7 @@ class BookmarkAnalyzer:
                     self.logger.debug(f"Parsed bookmark: {bookmark}")
                 except Exception as e:
                     self.logger.warning(f"Error parsing bookmark item: {e}")
+                    continue
 
         return bookmarks
 
@@ -114,29 +119,75 @@ class BookmarkAnalyzer:
             int: Page number (1-indexed)
         """
         try:
-            # For our test purposes, we'll use a simple approach
-            # In a real scenario, you would need more sophisticated
-            # bookmark destination resolution
+            # Handle PyPDF2 Destination objects
             if hasattr(bookmark, 'page') and bookmark.page is not None:
-                # Try different approaches to get page number
                 page_ref = bookmark.page
-
-                # If it's an integer, use it directly (1-indexed)
+                
+                # Handle IndirectObject references
+                if hasattr(page_ref, 'get_object'):
+                    try:
+                        page_obj = page_ref.get_object()
+                        # Find this page object in the pages list
+                        for i, page in enumerate(pdf_reader.pages):
+                            if page == page_obj:
+                                return i + 1  # Convert to 1-indexed
+                    except Exception as e:
+                        self.logger.debug(
+                            f"Failed to resolve IndirectObject: {e}"
+                        )
+                
+                # Handle direct page references
+                if hasattr(pdf_reader, 'pages'):
+                    for i, page in enumerate(pdf_reader.pages):
+                        if page == page_ref:
+                            return i + 1  # Convert to 1-indexed
+                
+                # Handle integer page numbers
                 if isinstance(page_ref, int):
-                    return max(1, page_ref + 1)
-
-                # For PyPDF2 destination objects, try to extract page
-                try:
-                    if hasattr(page_ref, '/Page'):
-                        return max(1, int(page_ref['/Page']) + 1)
-                except Exception:
-                    pass
+                    return max(1, page_ref + 1)  # Convert to 1-indexed
+            
+            # Try alternative destination methods
+            if hasattr(bookmark, 'dest') and bookmark.dest is not None:
+                dest = bookmark.dest
+                if hasattr(dest, 'page') and dest.page is not None:
+                    return self._get_page_number_from_ref(
+                        dest.page, pdf_reader
+                    )
 
         except Exception as e:
-            self.logger.debug(f"Page number detection method failed: {e}")
+            self.logger.debug(f"Page number detection failed: {e}")
 
-        # Default fallback: assign sequential page numbers
-        # This is a simplified approach for testing
+        # If all else fails, return page 1
+        return 1
+    
+    def _get_page_number_from_ref(self, page_ref: Any,
+                                  pdf_reader: PyPDF2.PdfReader) -> int:
+        """
+        Helper method to extract page number from various reference types.
+        
+        Args:
+            page_ref: Page reference object
+            pdf_reader: PDF reader instance
+            
+        Returns:
+            int: Page number (1-indexed)
+        """
+        try:
+            # Handle IndirectObject
+            if hasattr(page_ref, 'get_object'):
+                page_obj = page_ref.get_object()
+                for i, page in enumerate(pdf_reader.pages):
+                    if page == page_obj:
+                        return i + 1
+            
+            # Handle direct page objects
+            for i, page in enumerate(pdf_reader.pages):
+                if page == page_ref:
+                    return i + 1
+                    
+        except Exception as e:
+            self.logger.debug(f"Reference resolution failed: {e}")
+            
         return 1
 
     def filter_by_level(self, bookmarks: List[Dict[str, Any]],
@@ -204,24 +255,45 @@ class BookmarkAnalyzer:
             self.logger.warning("No bookmarks provided for split points")
             return []
 
-        # Sort bookmarks by page number
+        # Sort bookmarks by page number and remove duplicates
         sorted_bookmarks = sorted(bookmarks, key=lambda x: x['page'])
+        
+        # Remove bookmarks with duplicate page numbers
+        unique_bookmarks = []
+        seen_pages = set()
+        for bookmark in sorted_bookmarks:
+            if bookmark['page'] not in seen_pages:
+                unique_bookmarks.append(bookmark)
+                seen_pages.add(bookmark['page'])
+        
         split_points = []
 
-        for i, bookmark in enumerate(sorted_bookmarks):
+        for i, bookmark in enumerate(unique_bookmarks):
+            start_page = bookmark['page']
+            
+            # Calculate end page
+            end_page = None
+            if i + 1 < len(unique_bookmarks):
+                next_page = unique_bookmarks[i + 1]['page']
+                # Only set end page if next bookmark is on a different page
+                if next_page > start_page:
+                    end_page = next_page - 1
+                else:
+                    # Skip this bookmark if next one is on same/earlier page
+                    self.logger.debug(
+                        f"Skipping bookmark '{bookmark['title']}' - "
+                        f"invalid page sequence: {start_page} -> {next_page}"
+                    )
+                    continue
+            
             split_point = {
                 'title': bookmark['title'],
-                'start_page': bookmark['page'],
-                'end_page': None,
+                'start_page': start_page,
+                'end_page': end_page,
                 'level': bookmark['level']
             }
 
-            # Set end page as the page before next bookmark
-            if i + 1 < len(sorted_bookmarks):
-                split_point['end_page'] = sorted_bookmarks[i + 1]['page'] - 1
-            # For last bookmark, end_page will be set by PDFSplitter
-
             split_points.append(split_point)
 
-        self.logger.info(f"Generated {len(split_points)} split points")
+        self.logger.info(f"Generated {len(split_points)} valid split points")
         return split_points

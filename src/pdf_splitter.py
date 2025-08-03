@@ -120,14 +120,43 @@ class PDFSplitter:
 
         # Create output PDF
         output_pdf = PyPDF2.PdfWriter()
-
-        # Add pages to output PDF
+        
+        # Add pages to output PDF with better error handling
+        pages_added = 0
         for page_num in range(start_page, end_page):
             try:
-                output_pdf.add_page(source_pdf.pages[page_num])
+                # Create a copy of the page to avoid recursion issues
+                source_page = source_pdf.pages[page_num]
+                
+                # Try different approaches to add the page
+                try:
+                    output_pdf.add_page(source_page)
+                    pages_added += 1
+                except RecursionError:
+                    # Handle maximum recursion depth
+                    self.logger.warning(
+                        f"Recursion limit hit for page {page_num + 1}, "
+                        f"skipping this page"
+                    )
+                    continue
+                except Exception as inner_e:
+                    self.logger.warning(
+                        f"Failed to add page {page_num + 1}: {inner_e}"
+                    )
+                    continue
+                    
             except Exception as e:
-                self.logger.warning(f"Error adding page {page_num + 1}: {e}")
+                self.logger.warning(
+                    f"Error accessing page {page_num + 1}: {e}"
+                )
                 continue
+        
+        # Only create file if we actually added some pages
+        if pages_added == 0:
+            self.logger.warning(
+                f"No pages could be added for '{split_point['title']}'"
+            )
+            return None
 
         # Generate filename
         filename = self._generate_filename(split_point['title'], index)
@@ -137,8 +166,9 @@ class PDFSplitter:
         with open(output_path, 'wb') as output_file:
             output_pdf.write(output_file)
 
-        page_count = end_page - start_page
-        self.logger.info(f"Created split PDF: {filename} ({page_count} pages)")
+        self.logger.info(
+            f"Created split PDF: {filename} ({pages_added} pages)"
+        )
 
         return output_path
 

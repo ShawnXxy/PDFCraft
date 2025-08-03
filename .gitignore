@@ -191,6 +191,6 @@ ehthumbs.db
 Thumbs.db
 
 # PDF output directories (optional - uncomment if you don't want to track outputs)
-# split_pdfs/
-# markdown/
-# *_output/
+split_pdfs/
+markdown/
+*_output*/

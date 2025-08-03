@@ -111,8 +111,10 @@ class MarkdownConverter:
         """
         try:
             # Test markitdown with a simple text
+            import io
+            test_stream = io.StringIO("test")
             test_result = self.markitdown.convert_stream(
-                stream_content="test",
+                stream=test_stream,
                 file_extension=".txt"
             )
             return test_result is not None
